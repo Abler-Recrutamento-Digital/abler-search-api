@@ -52,6 +52,16 @@ if ELASTICSEARCH_URL.startswith("https://"):
 # Cliente Elasticsearch
 es_client = Elasticsearch(ELASTICSEARCH_URL, **es_config)
 
+async def get_city_data(city_id: int) -> Dict[str, str]:
+    try:
+        city = es_client.get(index="cities", id=city_id)
+        return {
+            "city": city["_source"]["name"],
+            "state": city["_source"]["state"]["name"]
+        }
+    except:
+        return {"city": None, "state": None}
+
 class SearchRequest(BaseModel):
     q: str
     email: Optional[str] = None
@@ -61,6 +71,54 @@ class SearchRequest(BaseModel):
 class SearchResponse(BaseModel):
     huntings: List[Dict[str, Any]]
     total: int
+
+class Education(BaseModel):
+    course: str
+    degree: Optional[str] = None
+    institution: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    present: bool = False
+
+class Experience(BaseModel):
+    company: str
+    title: str
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    description: str
+    salary: Optional[float] = None
+    present: bool = False
+
+class Course(BaseModel):
+    course_name: str
+    institution: str
+    end_date: Optional[str] = None
+    duration: Optional[str] = None
+
+class Language(BaseModel):
+    language: str
+    level: Optional[str] = None
+
+class CandidateResponse(BaseModel):
+    abler_id: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    birthday: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    country: Optional[str] = None
+    neighborhood: Optional[str] = None
+    profile_url: str
+    linkedin_public_identifier: Optional[str] = None
+    salary_minimum: Optional[float] = None
+    salary_maximum: Optional[float] = None
+    education: List[Education] = []
+    experience: List[Experience] = []
+    courses: List[Course] = []
+    languages: List[Language] = []
 
 def verify_swagger_credentials(credentials: HTTPBasicCredentials = Depends(security)):
     is_username_correct = secrets.compare_digest(credentials.username.encode("utf8"), SWAGGER_USERNAME.encode("utf8"))
@@ -181,12 +239,75 @@ async def search_candidates(
 
         # Processando os resultados
         hits = response["hits"]["hits"]
-        candidates = [hit["_source"] for hit in hits]
-        total = response["hits"]["total"]["value"]
+        candidates = []
+        
+        for hit in hits:
+            source = hit["_source"]
+            
+            # Busca dados da cidade e estado
+            address = source.get("address", {})
+            city_id = address.get("city_id")
+            city_data = await get_city_data(city_id) if city_id else {"city": None, "state": None}
+            
+            # Formatando o candidato conforme o novo padrão
+            candidate = {
+                "abler_id": str(source.get("id", "")),
+                "created_at": source.get("created_at"),
+                "updated_at": source.get("profile_updated_at"),
+                "name": source.get("name"),
+                "email": source.get("email"),
+                "phone": source.get("phone", "").replace("(", "").replace(")", "").replace("-", "").strip(),
+                "birthday": source.get("birthday"),
+                "city": city_data["city"],
+                "state": city_data["state"],
+                "country": source.get("nationality"),
+                "neighborhood": address.get("neighborhood"),
+                "profile_url": f"https://ats.abler.com.br/app/candidates/{source.get('id', '')}",
+                "linkedin_public_identifier": source.get("linkedin_identifier"),
+                "salary_minimum": float(source.get("salary_intended", 0)) if source.get("salary_intended") else None,
+                "salary_maximum": float(source.get("salary_intended_max_parsed", 0)) if source.get("salary_intended_max_parsed") else None,
+                "education": [
+                    {
+                        "course": edu.get("course_text", ""),
+                        "degree": edu.get("level"),
+                        "institution": None,
+                        "start_date": None,
+                        "end_date": None,
+                        "present": False
+                    } for edu in source.get("educational_profiles", []) if edu.get("course_text")
+                ],
+                "experience": [
+                    {
+                        "company": exp.get("company", ""),
+                        "title": exp.get("role_name", ""),
+                        "start_date": None,
+                        "end_date": None,
+                        "description": exp.get("activities_text", ""),
+                        "salary": float(exp.get("last_salary", 0)) if exp.get("last_salary") else None,
+                        "present": False
+                    } for exp in source.get("national_experiences", []) + source.get("international_experiences", [])
+                ],
+                "courses": [
+                    {
+                        "course_name": course.get("course", ""),
+                        "institution": course.get("institution", ""),
+                        "end_date": None,
+                        "duration": "Curta (até 40 horas)"
+                    } for course in source.get("complementary_trainings", [])
+                ],
+                "languages": [
+                    {
+                        "language": "Português" if lang.get("language_id") == 2 else "Inglês" if lang.get("language_id") == 1 else "Outro",
+                        "level": lang.get("level")
+                    } for lang in source.get("candidates_languages", [])
+                ]
+            }
+            
+            candidates.append(candidate)
 
         return SearchResponse(
             huntings=candidates,
-            total=total
+            total=response["hits"]["total"]["value"]
         )
 
     except Exception as e:
