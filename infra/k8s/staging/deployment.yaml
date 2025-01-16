@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: abler-search-api
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  minReadySeconds: 5
+  selector:
+    matchLabels:
+      app: abler-search-api
+  template:
+    metadata:
+      labels:
+        app: abler-search-api
+    spec:
+      containers:
+        - name: abler-search-api
+          image: produtosabler/abler-search-api:${{ github.sha }}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: abler-search-api
+          # resources:
+          #   requests:
+          #     cpu: 1
+          #     memory: 1Gi
+          #   limits:
+          #     cpu: 1
+          #     memory: 1Gi
+      imagePullSecrets:
+        - name: acr-secret
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: run
+                operator: In
+                values:
+                - apps
