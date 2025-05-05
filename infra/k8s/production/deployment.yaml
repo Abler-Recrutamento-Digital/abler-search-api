@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: abler-search-api
 spec:
-  replicas: 3
+  replicas: 2
   strategy:
     rollingUpdate:
       maxSurge: 1
@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: abler-search-api
-          image: produtosabler/abler-search-api:production
+          image: produtosabler/abler-search-api:${{ github.sha }}
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
