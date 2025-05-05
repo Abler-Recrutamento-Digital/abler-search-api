@@ -200,6 +200,8 @@ async def search_candidates(
                     "query": request.q,
                     "fields": [
                         "name^5",
+                        "city^4",
+                        "state^4",
                         "cover_letter_text^4",
                         "national_experiences.role_name^4",
                         "national_experiences.activities_text^3",
