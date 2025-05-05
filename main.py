@@ -29,7 +29,7 @@ API_TOKEN = os.getenv("API_TOKEN")
 security = HTTPBasic()
 
 # Configuração do Elasticsearch
-ELASTICSEARCH_URL = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
+ELASTICSEARCH_URL = os.getenv("ELASTICSEARCH_URL", "https://hulk-es-http.elasticsearch.svc.cluster.local:9200")
 ELASTICSEARCH_INDEX = os.getenv("ELASTICSEARCH_INDEX", "candidates")
 ELASTICSEARCH_USERNAME = os.getenv("ELASTICSEARCH_USERNAME")
 ELASTICSEARCH_PASSWORD = os.getenv("ELASTICSEARCH_PASSWORD")
