@@ -90,8 +90,8 @@ class SearchRequest(BaseModel):
     linkedin_identifier: Optional[str] = None
 
 class SearchResponse(BaseModel):
-    huntings: List[Dict[str, Any]]
     total: int
+    results: List[Dict[str, Any]]
 
 class Education(BaseModel):
     course: str
@@ -230,7 +230,7 @@ async def search_candidates(
 
         # Se não houver nenhuma condição, retorna lista vazia
         if not must_conditions:
-            return SearchResponse(huntings=[], total=0)
+            return SearchResponse(total=0, results=[])
 
         # Query final
         query = {
@@ -334,11 +334,12 @@ async def search_candidates(
             candidates.append(candidate)
 
         return SearchResponse(
-            huntings=candidates,
-            total=response["hits"]["total"]["value"]
+            total=response["hits"]["total"]["value"],
+            results=candidates
         )
 
     except Exception as e:
+        print(f"ERRO GERAL na busca: {str(e)}") # Adicionando log de erro geral
         raise HTTPException(
             status_code=500,
             detail=f"Error searching huntings: {str(e)}"
