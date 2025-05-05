@@ -11,7 +11,6 @@ RUN apt-get update && \
 # Copia os arquivos do projeto
 COPY ../../requirements.txt .
 COPY ../../main.py .
-COPY ../../.env .
 
 # Instala as dependências Python
 RUN pip install --no-cache-dir -r requirements.txt

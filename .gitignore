@@ -9,6 +9,7 @@ env/
 ENV/
 
 # Environment variables
+*.env
 .env
 
 # IDE specific files

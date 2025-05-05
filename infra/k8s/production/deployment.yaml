@@ -30,6 +30,9 @@ spec:
           #   limits:
           #     cpu: 3
           #     memory: 3Gi
+          envFrom:
+            - secretRef:
+                name: abler-search-api
       imagePullSecrets:
         - name: acr-secret # container-registry
       affinity:
