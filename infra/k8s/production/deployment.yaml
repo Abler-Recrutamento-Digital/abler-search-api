@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: abler-search-api
-          image: produtosabler/abler-search-api:${{ github.sha }}
+          image: produtosabler/abler-search-api:production
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
