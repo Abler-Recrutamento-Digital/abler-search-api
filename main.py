@@ -35,9 +35,11 @@ ELASTICSEARCH_USERNAME = os.getenv("ELASTICSEARCH_USERNAME")
 ELASTICSEARCH_PASSWORD = os.getenv("ELASTICSEARCH_PASSWORD")
 
 # Configuração do cliente Elasticsearch
-es_config = {
-    "basic_auth": (ELASTICSEARCH_USERNAME, ELASTICSEARCH_PASSWORD)
-}
+es_config = {}
+
+# Adiciona autenticação básica apenas se username e password estiverem presentes
+if ELASTICSEARCH_USERNAME and ELASTICSEARCH_PASSWORD:
+    es_config["basic_auth"] = (ELASTICSEARCH_USERNAME, ELASTICSEARCH_PASSWORD)
 
 # Adiciona configurações SSL apenas se a URL for HTTPS
 if ELASTICSEARCH_URL.startswith("https://"):
