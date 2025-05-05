@@ -22,7 +22,7 @@ spec:
           image: produtosabler/abler-search-api:${{ github.sha }}
           imagePullPolicy: Always
           ports:
-            - containerPort: 3001
+            - containerPort: 8000
           # resources:
           #   requests:
           #     cpu: 2

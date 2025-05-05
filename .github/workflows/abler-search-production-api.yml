@@ -50,16 +50,16 @@ jobs:
       - name: Deploy
         run: |-
           # Aplicar o deployment
-          kubectl apply -f infra/k8s/production/deployment.yaml -n ats --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production
+          kubectl apply -f infra/k8s/production/deployment.yaml -n search-api --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production
           
           # Atualizar a imagem e forçar um novo pull
-          kubectl set image deployment/abler-search-api abler-search-api=produtosabler/abler-search-api:${{ github.sha }} -n ats --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production
+          kubectl set image deployment/abler-search-api abler-search-api=produtosabler/abler-search-api:${{ github.sha }} -n search-api --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production
           
           # Deletar os pods existentes para forçar recriação
-          kubectl delete pods -l app=abler-search-api -n ats --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production
+          kubectl delete pods -l app=abler-search-api -n search-api --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production
           
           # Aguardar o rollout
-          kubectl rollout status deployment/abler-search-api -n ats --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production
+          kubectl rollout status deployment/abler-search-api -n search-api --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production
 
       # Verificar status do pod após o deploy
       - name: Check Pod Status
@@ -69,16 +69,16 @@ jobs:
           sleep 30
           
           echo "Status do Pod:"
-          kubectl get pods -n ats --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production
+          kubectl get pods -n search-api --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production
           
           echo "Detalhes do Pod:"
-          POD_NAME=$(kubectl get pods -n ats --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production -l app=abler-search-api -o jsonpath="{.items[0].metadata.name}")
+          POD_NAME=$(kubectl get pods -n search-api --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production -l app=abler-search-api -o jsonpath="{.items[0].metadata.name}")
           
           echo "Events do Pod:"
-          kubectl get events -n ats --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production --field-selector involvedObject.name=$POD_NAME
+          kubectl get events -n search-api --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production --field-selector involvedObject.name=$POD_NAME
           
           echo "Descrição detalhada do Pod:"
-          kubectl describe pod $POD_NAME -n ats --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production
+          kubectl describe pod $POD_NAME -n search-api --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production
           
           echo "Logs do Pod (se disponível):"
-          kubectl logs $POD_NAME -n ats --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production --previous || true
+          kubectl logs $POD_NAME -n search-api --kubeconfig=infra/k8s/production/kubeconfig-k8s-abler-production --previous || true
