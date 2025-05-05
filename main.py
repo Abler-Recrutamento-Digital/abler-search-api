@@ -39,10 +39,16 @@ es_config = {}
 
 # Adiciona autenticação básica apenas se username e password estiverem presentes
 if ELASTICSEARCH_USERNAME and ELASTICSEARCH_PASSWORD:
+    print(f"DEBUG - Configurando autenticação básica para Elasticsearch com usuário: {ELASTICSEARCH_USERNAME}")
     es_config["basic_auth"] = (ELASTICSEARCH_USERNAME, ELASTICSEARCH_PASSWORD)
+else:
+    print("ALERTA - ELASTICSEARCH_USERNAME ou ELASTICSEARCH_PASSWORD não estão configurados!")
+    print("ELASTICSEARCH_USERNAME presente:", ELASTICSEARCH_USERNAME is not None)
+    print("ELASTICSEARCH_PASSWORD presente:", ELASTICSEARCH_PASSWORD is not None)
 
 # Adiciona configurações SSL apenas se a URL for HTTPS
 if ELASTICSEARCH_URL.startswith("https://"):
+    print(f"DEBUG - Configurando SSL para Elasticsearch URL: {ELASTICSEARCH_URL}")
     context = ssl.create_default_context(cafile=certifi.where())
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
@@ -51,8 +57,21 @@ if ELASTICSEARCH_URL.startswith("https://"):
         "verify_certs": False
     })
 
+# Mostra a configuração final (sem expor a senha)
+debug_config = es_config.copy()
+if "basic_auth" in debug_config:
+    auth = debug_config["basic_auth"]
+    debug_config["basic_auth"] = (auth[0], "********") if auth[0] else ("None", "********")
+print("DEBUG - Configuração Elasticsearch:", debug_config)
+
 # Cliente Elasticsearch
-es_client = Elasticsearch(ELASTICSEARCH_URL, **es_config)
+try:
+    es_client = Elasticsearch(ELASTICSEARCH_URL, **es_config)
+    # Teste de conectividade
+    info = es_client.info()
+    print(f"DEBUG - Conexão com Elasticsearch estabelecida. Versão: {info.get('version', {}).get('number')}")
+except Exception as e:
+    print(f"ERRO - Falha ao conectar com Elasticsearch: {str(e)}")
 
 async def get_city_data(city_id: int) -> Dict[str, str]:
     try:
@@ -228,16 +247,23 @@ async def search_candidates(
         print("="*50)
 
         # Fazendo a busca no Elasticsearch
-        response = es_client.search(
-            index=ELASTICSEARCH_INDEX,
-            body=query,
-            size=50  # Limitando a 50 resultados por página
-        )
-
-        print("="*50)
-        print("DEBUG - Elasticsearch Response:")
-        print(response)
-        print("="*50)
+        try:
+            response = es_client.search(
+                index=ELASTICSEARCH_INDEX,
+                body=query,
+                size=50  # Limitando a 50 resultados por página
+            )
+            
+            print("="*50)
+            print("DEBUG - Elasticsearch Response:")
+            print(f"Total hits: {response.get('hits', {}).get('total', {}).get('value', 0)}")
+            print("="*50)
+        except Exception as es_error:
+            print(f"ERRO - Falha na consulta ao Elasticsearch: {str(es_error)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error searching in Elasticsearch: {str(es_error)}"
+            )
 
         # Processando os resultados
         hits = response["hits"]["hits"]
