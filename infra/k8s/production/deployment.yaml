@@ -40,5 +40,5 @@ spec:
               - key: run
                 operator: In
                 values:
-                - front
+                - backend
 
