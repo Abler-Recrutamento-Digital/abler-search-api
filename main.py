@@ -84,7 +84,7 @@ async def get_city_data(city_id: int) -> Dict[str, str]:
         return {"city": None, "state": None}
 
 class SearchRequest(BaseModel):
-    q: str
+    q: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     linkedin_identifier: Optional[str] = None
