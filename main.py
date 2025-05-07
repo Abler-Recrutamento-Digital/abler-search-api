@@ -211,45 +211,56 @@ async def search_candidates(
         if request.q and request.q.strip():
             query_text = request.q.strip()
             
-            # Primeiro, buscar no índice de cidades para encontrar cidades que correspondam à consulta
+            # Primeiro, vamos verificar se a consulta contém operadores OR entre nomes de cidades
+            possible_city_queries = []
+            
+            # Verifica se há operadores OR explícitos
+            if " OR " in query_text:
+                or_terms = [term.strip() for term in query_text.split(" OR ")]
+                for term in or_terms:
+                    if term and len(term) > 2:  # Ignorar termos muito curtos
+                        # Para termos que parecem ser compostos (como "São José dos Pinhais")
+                        possible_city_queries.append(term)
+            
+            # Também verifica os termos individuais
+            individual_terms = [term.strip('()"\'"') for term in query_text.replace(" AND ", " ").replace(" OR ", " ").split()]
+            for term in individual_terms:
+                if term and len(term) > 2 and term not in possible_city_queries:  # Ignorar termos muito curtos e duplicados
+                    possible_city_queries.append(term)
+            
+            print(f"DEBUG - Possíveis consultas de cidades: {possible_city_queries}")
+            
+            # Buscar cidades para cada possível nome
             try:
-                # Extrair possíveis nomes de cidades da consulta
-                # Aqui dividimos a consulta pelos operadores AND e OR para tratar cada termo separadamente
-                possible_cities = []
-                for term in query_text.replace(" AND ", " ").replace(" OR ", " ").split():
-                    # Remover caracteres especiais que podem atrapalhar a busca
-                    cleaned_term = term.strip('()"\'"')
-                    if cleaned_term and len(cleaned_term) > 2:  # Ignorar termos muito curtos
-                        possible_cities.append(cleaned_term)
-                
-                print(f"DEBUG - Possíveis cidades para busca: {possible_cities}")
-                
-                # Se identificamos possíveis cidades, buscar cada uma delas
-                if possible_cities:
-                    for city_name in possible_cities:
-                        cities_query = {
-                            "query": {
-                                "bool": {
-                                    "should": [
-                                        {"match_phrase": {"name": city_name}},
-                                        {"match": {"name": {"query": city_name, "fuzziness": "AUTO"}}}
-                                    ]
-                                }
-                            },
-                            "size": 5  # Limitando a 5 resultados por termo
-                        }
-                        
-                        cities_response = es_client.search(
-                            index=ELASTICSEARCH_INDEX_CITIES,
-                            body=cities_query
-                        )
-                        
-                        # Extrair IDs das cidades encontradas
-                        for city_hit in cities_response["hits"]["hits"]:
-                            city_id = city_hit["_id"]
-                            if city_id not in city_ids:  # Evitar duplicatas
+                for city_query in possible_city_queries:
+                    # Para termos que parecem nomes de cidades, vamos buscar com prioridade para match_phrase
+                    cities_query = {
+                        "query": {
+                            "bool": {
+                                "should": [
+                                    {"match_phrase": {"name": {"query": city_query, "boost": 10}}},
+                                    {"match": {"name": {"query": city_query, "fuzziness": "AUTO"}}}
+                                ],
+                                "minimum_should_match": 1
+                            }
+                        },
+                        "size": 5  # Limitando a 5 resultados por termo
+                    }
+                    
+                    cities_response = es_client.search(
+                        index=ELASTICSEARCH_INDEX_CITIES,
+                        body=cities_query
+                    )
+                    
+                    # Extrair IDs das cidades encontradas
+                    for city_hit in cities_response["hits"]["hits"]:
+                        city_id = city_hit["_id"]
+                        if city_id not in city_ids:  # Evitar duplicatas
+                            city_score = city_hit.get("_score", 0)
+                            # Só adiciona a cidade se o score for bom (maior que 5)
+                            if city_score > 5:
                                 city_ids.append(city_id)
-                                print(f"DEBUG - Cidade encontrada: {city_hit['_source'].get('name')} (ID: {city_id})")
+                                print(f"DEBUG - Cidade encontrada: {city_hit['_source'].get('name')} (ID: {city_id}, Score: {city_score})")
                 
                 print(f"DEBUG - Total de cidades encontradas: {len(city_ids)} IDs")
             except Exception as city_error:
@@ -306,7 +317,7 @@ async def search_candidates(
         # Se encontramos cidades, adicionar um "should" para aumentar o score de candidatos nessas cidades
         if city_ids:
             query["query"]["bool"]["should"] = [
-                {"terms": {"address.city_id": city_ids, "boost": 5.0}}
+                {"terms": {"address.city_id": city_ids, "boost": 10.0}}
             ]
             # Define minimum_should_match como 0 para que seja um boost, não um requisito
             query["query"]["bool"]["minimum_should_match"] = 0
@@ -430,32 +441,62 @@ async def search_cities(
         if not request.q.strip():
             return CityResponse(total=0, query={}, results=[])
         
-        # Construindo a query
-        if request.exact:
-            # Busca exata pelo nome da cidade
+        # Se a consulta contiver operador OR, separamos e tratamos cada termo individualmente
+        if " OR " in request.q:
+            city_names = [term.strip() for term in request.q.split(" OR ")]
+            print(f"DEBUG - Buscando cidades separadamente: {city_names}")
+            
+            # Lista de consultas para cada cidade
+            should_clauses = []
+            
+            for city_name in city_names:
+                if request.exact:
+                    # Busca exata para cada cidade
+                    should_clauses.append({"term": {"name.keyword": city_name}})
+                else:
+                    # Busca por frase para cada cidade
+                    should_clauses.append({"match_phrase": {"name": {"query": city_name, "boost": 10}}})
+                    # Adicionamos também uma correspondência menos estrita como fallback
+                    should_clauses.append({"match": {"name": {"query": city_name, "fuzziness": "AUTO"}}})
+            
+            # Construindo a query com operadores OR (should)
             query = {
                 "query": {
                     "bool": {
-                        "should": [
-                            {"term": {"name.keyword": request.q.strip()}},
-                            {"match_phrase": {"name": request.q.strip()}}
-                        ]
+                        "should": should_clauses,
+                        "minimum_should_match": 1
                     }
                 }
             }
         else:
-            # Busca usando query_string para melhor flexibilidade
-            query = {
-                "query": {
-                    "query_string": {
-                        "query": request.q.strip(),
-                        "fields": ["name^3", "state.name^2", "*"],
-                        "default_operator": "OR",
-                        "analyze_wildcard": True,
-                        "fuzziness": "AUTO"
+            # Para consultas sem OR, mantemos o comportamento original
+            if request.exact:
+                # Busca exata pelo nome da cidade
+                query = {
+                    "query": {
+                        "bool": {
+                            "should": [
+                                {"term": {"name.keyword": request.q.strip()}},
+                                {"match_phrase": {"name": request.q.strip()}}
+                            ],
+                            "minimum_should_match": 1
+                        }
                     }
                 }
-            }
+            else:
+                # Busca usando match para nomes de cidades
+                query = {
+                    "query": {
+                        "bool": {
+                            "should": [
+                                {"match_phrase": {"name": {"query": request.q.strip(), "boost": 10}}},
+                                {"match": {"name": {"query": request.q.strip(), "fuzziness": "AUTO"}}},
+                                {"match": {"state.name": {"query": request.q.strip(), "boost": 2}}}
+                            ],
+                            "minimum_should_match": 1
+                        }
+                    }
+                }
         
         # Log da consulta
         print("="*50)
