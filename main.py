@@ -31,6 +31,7 @@ security = HTTPBasic()
 # Configuração do Elasticsearch
 ELASTICSEARCH_URL = os.getenv("ELASTICSEARCH_URL", "https://hulk-es-http.elasticsearch.svc.cluster.local:9200")
 ELASTICSEARCH_INDEX = os.getenv("ELASTICSEARCH_INDEX", "candidates")
+ELASTICSEARCH_INDEX_CITIES = os.getenv("ELASTICSEARCH_INDEX_CITIES", "cities")
 ELASTICSEARCH_USERNAME = os.getenv("ELASTICSEARCH_USERNAME")
 ELASTICSEARCH_PASSWORD = os.getenv("ELASTICSEARCH_PASSWORD")
 
@@ -75,7 +76,7 @@ except Exception as e:
 
 async def get_city_data(city_id: int) -> Dict[str, str]:
     try:
-        city = es_client.get(index="cities", id=city_id)
+        city = es_client.get(index=ELASTICSEARCH_INDEX_CITIES, id=city_id)
         return {
             "city": city["_source"]["name"],
             "state": city["_source"]["state"]["name"]
@@ -88,6 +89,16 @@ class SearchRequest(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     linkedin_identifier: Optional[str] = None
+
+class CityRequest(BaseModel):
+    q: str
+    exact: Optional[bool] = False
+    size: Optional[int] = 20
+
+class CityResponse(BaseModel):
+    total: int
+    query: Dict[str, Any]
+    results: List[Dict[str, Any]]
 
 class SearchResponse(BaseModel):
     total: int
@@ -202,27 +213,45 @@ async def search_candidates(
             
             # Primeiro, buscar no índice de cidades para encontrar cidades que correspondam à consulta
             try:
-                cities_query = {
-                    "query": {
-                        "query_string": {
-                            "query": query_text,
-                            "fields": ["name^2", "state.name"],
-                            "default_operator": "AND"
+                # Extrair possíveis nomes de cidades da consulta
+                # Aqui dividimos a consulta pelos operadores AND e OR para tratar cada termo separadamente
+                possible_cities = []
+                for term in query_text.replace(" AND ", " ").replace(" OR ", " ").split():
+                    # Remover caracteres especiais que podem atrapalhar a busca
+                    cleaned_term = term.strip('()"\'"')
+                    if cleaned_term and len(cleaned_term) > 2:  # Ignorar termos muito curtos
+                        possible_cities.append(cleaned_term)
+                
+                print(f"DEBUG - Possíveis cidades para busca: {possible_cities}")
+                
+                # Se identificamos possíveis cidades, buscar cada uma delas
+                if possible_cities:
+                    for city_name in possible_cities:
+                        cities_query = {
+                            "query": {
+                                "bool": {
+                                    "should": [
+                                        {"match_phrase": {"name": city_name}},
+                                        {"match": {"name": {"query": city_name, "fuzziness": "AUTO"}}}
+                                    ]
+                                }
+                            },
+                            "size": 5  # Limitando a 5 resultados por termo
                         }
-                    },
-                    "size": 50
-                }
+                        
+                        cities_response = es_client.search(
+                            index=ELASTICSEARCH_INDEX_CITIES,
+                            body=cities_query
+                        )
+                        
+                        # Extrair IDs das cidades encontradas
+                        for city_hit in cities_response["hits"]["hits"]:
+                            city_id = city_hit["_id"]
+                            if city_id not in city_ids:  # Evitar duplicatas
+                                city_ids.append(city_id)
+                                print(f"DEBUG - Cidade encontrada: {city_hit['_source'].get('name')} (ID: {city_id})")
                 
-                cities_response = es_client.search(
-                    index="cities",
-                    body=cities_query
-                )
-                
-                # Extrair IDs das cidades encontradas
-                for city_hit in cities_response["hits"]["hits"]:
-                    city_ids.append(city_hit["_id"])
-                
-                print(f"DEBUG - Cidades encontradas: {len(city_ids)} IDs")
+                print(f"DEBUG - Total de cidades encontradas: {len(city_ids)} IDs")
             except Exception as city_error:
                 print(f"ALERTA - Erro ao buscar cidades: {str(city_error)}")
                 # Continua mesmo se houver erro na busca de cidades
@@ -277,7 +306,7 @@ async def search_candidates(
         # Se encontramos cidades, adicionar um "should" para aumentar o score de candidatos nessas cidades
         if city_ids:
             query["query"]["bool"]["should"] = [
-                {"terms": {"address.city_id": city_ids}}
+                {"terms": {"address.city_id": city_ids, "boost": 5.0}}
             ]
             # Define minimum_should_match como 0 para que seja um boost, não um requisito
             query["query"]["bool"]["minimum_should_match"] = 0
@@ -384,4 +413,90 @@ async def search_candidates(
         raise HTTPException(
             status_code=500,
             detail=f"Error searching huntings: {str(e)}"
+        )
+
+@app.post("/cities", response_model=CityResponse)
+async def search_cities(
+    request: CityRequest,
+    api_key: str = Depends(verify_api_key)
+) -> CityResponse:
+    """
+    Busca cidades no índice do Elasticsearch.
+    
+    Este endpoint é útil para entender a estrutura do índice 'cities' e
+    como os dados são armazenados e podem ser consultados.
+    """
+    try:
+        if not request.q.strip():
+            return CityResponse(total=0, query={}, results=[])
+        
+        # Construindo a query
+        if request.exact:
+            # Busca exata pelo nome da cidade
+            query = {
+                "query": {
+                    "bool": {
+                        "should": [
+                            {"term": {"name.keyword": request.q.strip()}},
+                            {"match_phrase": {"name": request.q.strip()}}
+                        ]
+                    }
+                }
+            }
+        else:
+            # Busca usando query_string para melhor flexibilidade
+            query = {
+                "query": {
+                    "query_string": {
+                        "query": request.q.strip(),
+                        "fields": ["name^3", "state.name^2", "*"],
+                        "default_operator": "OR",
+                        "analyze_wildcard": True,
+                        "fuzziness": "AUTO"
+                    }
+                }
+            }
+        
+        # Log da consulta
+        print("="*50)
+        print("DEBUG - Consulta de Cidades:")
+        print(query)
+        print("="*50)
+        
+        # Executando a consulta
+        response = es_client.search(
+            index=ELASTICSEARCH_INDEX_CITIES,
+            body=query,
+            size=request.size
+        )
+        
+        # Processando resultados
+        hits = response["hits"]["hits"]
+        cities = []
+        
+        for hit in hits:
+            city_data = hit["_source"]
+            city_info = {
+                "id": hit["_id"],
+                "name": city_data.get("name"),
+                "state": city_data.get("state", {}).get("name"),
+                "state_id": city_data.get("state", {}).get("id"),
+                "score": hit.get("_score")
+            }
+            cities.append(city_info)
+        
+        print(f"DEBUG - Cidades encontradas: {len(cities)}")
+        print("="*50)
+        
+        return CityResponse(
+            total=response["hits"]["total"]["value"],
+            query=query,
+            results=cities
+        )
+            
+    except Exception as e:
+        print(f"ERRO - Falha na busca de cidades: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro ao buscar cidades: {str(e)}"
         )
