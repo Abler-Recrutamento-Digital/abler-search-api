@@ -436,10 +436,64 @@ async def search_cities(
     
     Este endpoint é útil para entender a estrutura do índice 'cities' e
     como os dados são armazenados e podem ser consultados.
+    
+    Se o parâmetro 'q' estiver vazio, retorna todas as cidades (limitado a 10.000 resultados).
     """
     try:
+        # Definir um tamanho máximo seguro para a consulta
+        max_size = 10000
+        size = min(request.size, max_size)
+        
+        # Se q estiver vazio, buscar todas as cidades
         if not request.q.strip():
-            return CityResponse(total=0, query={}, results=[])
+            print(f"DEBUG - Listando todas as cidades (limitado a {size} resultados)")
+            
+            # Consulta para retornar todas as cidades
+            query = {
+                "query": {
+                    "match_all": {}
+                },
+                "sort": [
+                    {"name.keyword": {"order": "asc"}}  # Ordenar por nome
+                ]
+            }
+            
+            # Log da consulta
+            print("="*50)
+            print("DEBUG - Consultando todas as cidades")
+            print(query)
+            print("="*50)
+            
+            # Executando a consulta
+            response = es_client.search(
+                index=ELASTICSEARCH_INDEX_CITIES,
+                body=query,
+                size=size
+            )
+            
+            # Processando resultados
+            hits = response["hits"]["hits"]
+            cities = []
+            
+            for hit in hits:
+                city_data = hit["_source"]
+                city_info = {
+                    "id": hit["_id"],
+                    "name": city_data.get("name"),
+                    "state": city_data.get("state", {}).get("name"),
+                    "state_id": city_data.get("state", {}).get("id"),
+                    "score": hit.get("_score")
+                }
+                cities.append(city_info)
+            
+            print(f"DEBUG - Total de cidades retornadas: {len(cities)}")
+            print("="*50)
+            
+            return CityResponse(
+                total=response["hits"]["total"]["value"],
+                query=query,
+                results=cities
+            )
         
         # Se a consulta contiver operador OR, separamos e tratamos cada termo individualmente
         if " OR " in request.q:
@@ -508,7 +562,7 @@ async def search_cities(
         response = es_client.search(
             index=ELASTICSEARCH_INDEX_CITIES,
             body=query,
-            size=request.size
+            size=min(request.size, max_size)  # Limitando ao tamanho máximo seguro
         )
         
         # Processando resultados
