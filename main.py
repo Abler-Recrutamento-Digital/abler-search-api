@@ -448,14 +448,13 @@ async def search_cities(
         if not request.q.strip():
             print(f"DEBUG - Listando todas as cidades (limitado a {size} resultados)")
             
-            # Consulta para retornar todas as cidades
+            # Consulta para retornar todas as cidades sem ordenação
+            # Removida a ordenação por name.keyword que estava causando o erro
             query = {
                 "query": {
                     "match_all": {}
-                },
-                "sort": [
-                    {"name.keyword": {"order": "asc"}}  # Ordenar por nome
-                ]
+                }
+                # Ordenação removida pois o campo name.keyword não existe no mapeamento
             }
             
             # Log da consulta
@@ -464,36 +463,50 @@ async def search_cities(
             print(query)
             print("="*50)
             
-            # Executando a consulta
-            response = es_client.search(
-                index=ELASTICSEARCH_INDEX_CITIES,
-                body=query,
-                size=size
-            )
-            
-            # Processando resultados
-            hits = response["hits"]["hits"]
-            cities = []
-            
-            for hit in hits:
-                city_data = hit["_source"]
-                city_info = {
-                    "id": hit["_id"],
-                    "name": city_data.get("name"),
-                    "state": city_data.get("state", {}).get("name"),
-                    "state_id": city_data.get("state", {}).get("id"),
-                    "score": hit.get("_score")
-                }
-                cities.append(city_info)
-            
-            print(f"DEBUG - Total de cidades retornadas: {len(cities)}")
-            print("="*50)
-            
-            return CityResponse(
-                total=response["hits"]["total"]["value"],
-                query=query,
-                results=cities
-            )
+            try:
+                # Executando a consulta
+                response = es_client.search(
+                    index=ELASTICSEARCH_INDEX_CITIES,
+                    body=query,
+                    size=size
+                )
+                
+                # Processando resultados
+                hits = response["hits"]["hits"]
+                cities = []
+                
+                for hit in hits:
+                    city_data = hit["_source"]
+                    city_info = {
+                        "id": hit["_id"],
+                        "name": city_data.get("name"),
+                        "state": city_data.get("state", {}).get("name"),
+                        "state_id": city_data.get("state", {}).get("id"),
+                        "score": hit.get("_score")
+                    }
+                    cities.append(city_info)
+                
+                print(f"DEBUG - Total de cidades retornadas: {len(cities)}")
+                print("="*50)
+                
+                return CityResponse(
+                    total=response["hits"]["total"]["value"],
+                    query=query,
+                    results=cities
+                )
+            except Exception as search_error:
+                print(f"ERRO - Falha na busca de todas as cidades: {str(search_error)}")
+                # Verifica se há informações sobre o mapeamento para ajudar no diagnóstico
+                try:
+                    mapping = es_client.indices.get_mapping(index=ELASTICSEARCH_INDEX_CITIES)
+                    print(f"DEBUG - Mapeamento do índice: {mapping}")
+                except Exception as mapping_error:
+                    print(f"ERRO - Não foi possível obter o mapeamento do índice: {str(mapping_error)}")
+                
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Erro ao buscar todas as cidades: {str(search_error)}"
+                )
         
         # Se a consulta contiver operador OR, separamos e tratamos cada termo individualmente
         if " OR " in request.q:
@@ -505,8 +518,8 @@ async def search_cities(
             
             for city_name in city_names:
                 if request.exact:
-                    # Busca exata para cada cidade
-                    should_clauses.append({"term": {"name.keyword": city_name}})
+                    # Busca exata para cada cidade - usando match_phrase em vez de term com .keyword
+                    should_clauses.append({"match_phrase": {"name": {"query": city_name, "boost": 15}}})
                 else:
                     # Busca por frase para cada cidade
                     should_clauses.append({"match_phrase": {"name": {"query": city_name, "boost": 10}}})
@@ -525,13 +538,13 @@ async def search_cities(
         else:
             # Para consultas sem OR, mantemos o comportamento original
             if request.exact:
-                # Busca exata pelo nome da cidade
+                # Busca exata pelo nome da cidade - usando match_phrase em vez de term com .keyword
                 query = {
                     "query": {
                         "bool": {
                             "should": [
-                                {"term": {"name.keyword": request.q.strip()}},
-                                {"match_phrase": {"name": request.q.strip()}}
+                                {"match_phrase": {"name": {"query": request.q.strip(), "slop": 0, "boost": 15}}},
+                                {"match": {"name": {"query": request.q.strip(), "operator": "AND"}}}
                             ],
                             "minimum_should_match": 1
                         }
