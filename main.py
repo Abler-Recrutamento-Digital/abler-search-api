@@ -192,12 +192,45 @@ async def search_candidates(
     try:
         # Construindo a query base com query_string
         must_conditions = []
+        
+        # Variável para armazenar IDs de cidades encontradas
+        city_ids = []
 
         # Adiciona a query_string apenas se q não estiver vazio
         if request.q and request.q.strip():
+            query_text = request.q.strip()
+            
+            # Primeiro, buscar no índice de cidades para encontrar cidades que correspondam à consulta
+            try:
+                cities_query = {
+                    "query": {
+                        "query_string": {
+                            "query": query_text,
+                            "fields": ["name^2", "state.name"],
+                            "default_operator": "AND"
+                        }
+                    },
+                    "size": 50
+                }
+                
+                cities_response = es_client.search(
+                    index="cities",
+                    body=cities_query
+                )
+                
+                # Extrair IDs das cidades encontradas
+                for city_hit in cities_response["hits"]["hits"]:
+                    city_ids.append(city_hit["_id"])
+                
+                print(f"DEBUG - Cidades encontradas: {len(city_ids)} IDs")
+            except Exception as city_error:
+                print(f"ALERTA - Erro ao buscar cidades: {str(city_error)}")
+                # Continua mesmo se houver erro na busca de cidades
+            
+            # Adiciona a consulta principal para o índice de candidatos
             must_conditions.append({
                 "query_string": {
-                    "query": request.q,
+                    "query": query_text,
                     "fields": [
                         "name^5",
                         "cover_letter_text^4",
@@ -232,7 +265,7 @@ async def search_candidates(
         if not must_conditions:
             return SearchResponse(total=0, results=[])
 
-        # Query final
+        # Estrutura base da query
         query = {
             "query": {
                 "bool": {
@@ -240,6 +273,14 @@ async def search_candidates(
                 }
             }
         }
+
+        # Se encontramos cidades, adicionar um "should" para aumentar o score de candidatos nessas cidades
+        if city_ids:
+            query["query"]["bool"]["should"] = [
+                {"terms": {"address.city_id": city_ids}}
+            ]
+            # Define minimum_should_match como 0 para que seja um boost, não um requisito
+            query["query"]["bool"]["minimum_should_match"] = 0
 
         print("="*50)
         print("DEBUG - Elasticsearch Query:")
