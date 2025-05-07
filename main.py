@@ -1,7 +1,7 @@
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Security, Depends, status
 from fastapi.security import APIKeyHeader, HTTPBasic, HTTPBasicCredentials
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from elasticsearch import Elasticsearch
 from pydantic import BaseModel
 import os
@@ -151,6 +151,11 @@ class CandidateResponse(BaseModel):
     experience: List[Experience] = []
     courses: List[Course] = []
     languages: List[Language] = []
+
+class MappingResponse(BaseModel):
+    index: str
+    mappings: Dict[str, Any]
+    settings: Optional[Dict[str, Any]] = None
 
 def verify_swagger_credentials(credentials: HTTPBasicCredentials = Depends(security)):
     is_username_correct = secrets.compare_digest(credentials.username.encode("utf8"), SWAGGER_USERNAME.encode("utf8"))
@@ -426,6 +431,40 @@ async def search_candidates(
             detail=f"Error searching huntings: {str(e)}"
         )
 
+@app.post("/diagnostic/mapping", response_model=MappingResponse)
+async def get_index_mapping(
+    index_name: str = ELASTICSEARCH_INDEX_CITIES,
+    api_key: str = Depends(verify_api_key)
+) -> MappingResponse:
+    """
+    Retorna o mapeamento detalhado de um índice do Elasticsearch.
+    
+    Útil para diagnosticar problemas relacionados à estrutura dos campos do índice.
+    """
+    try:
+        # Obtém o mapeamento do índice
+        mapping = es_client.indices.get_mapping(index=index_name)
+        settings = es_client.indices.get_settings(index=index_name)
+        
+        # Log do mapeamento para diagnóstico
+        print("="*50)
+        print(f"DEBUG - Mapeamento do índice {index_name}:")
+        print(mapping)
+        print("="*50)
+        
+        # Retorna o resultado
+        return MappingResponse(
+            index=index_name,
+            mappings=mapping.get(index_name, {}).get("mappings", {}),
+            settings=settings.get(index_name, {}).get("settings", {})
+        )
+    except Exception as e:
+        print(f"ERRO - Falha ao obter mapeamento do índice {index_name}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro ao obter mapeamento: {str(e)}"
+        )
+
 @app.post("/cities", response_model=CityResponse)
 async def search_cities(
     request: CityRequest,
@@ -449,12 +488,10 @@ async def search_cities(
             print(f"DEBUG - Listando todas as cidades (limitado a {size} resultados)")
             
             # Consulta para retornar todas as cidades sem ordenação
-            # Removida a ordenação por name.keyword que estava causando o erro
             query = {
                 "query": {
                     "match_all": {}
                 }
-                # Ordenação removida pois o campo name.keyword não existe no mapeamento
             }
             
             # Log da consulta
@@ -518,7 +555,7 @@ async def search_cities(
             
             for city_name in city_names:
                 if request.exact:
-                    # Busca exata para cada cidade - usando match_phrase em vez de term com .keyword
+                    # Busca exata para cada cidade usando match_phrase em vez de term com .keyword
                     should_clauses.append({"match_phrase": {"name": {"query": city_name, "boost": 15}}})
                 else:
                     # Busca por frase para cada cidade
@@ -538,7 +575,7 @@ async def search_cities(
         else:
             # Para consultas sem OR, mantemos o comportamento original
             if request.exact:
-                # Busca exata pelo nome da cidade - usando match_phrase em vez de term com .keyword
+                # Busca exata pelo nome da cidade usando match_phrase em vez de term com .keyword
                 query = {
                     "query": {
                         "bool": {
