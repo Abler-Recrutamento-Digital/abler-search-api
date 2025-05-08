@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException, Security, Depends, status
 from fastapi.security import APIKeyHeader, HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import RedirectResponse, JSONResponse
 from elasticsearch import Elasticsearch
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import os
 from dotenv import load_dotenv
 import ssl
@@ -85,24 +85,34 @@ async def get_city_data(city_id: int) -> Dict[str, str]:
         return {"city": None, "state": None}
 
 class SearchRequest(BaseModel):
-    q: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    linkedin_identifier: Optional[str] = None
+    q: Optional[str] = Field(None, description="Termo principal de busca para encontrar candidatos (suporta operadores AND, OR e expressões)")
+    cities: Optional[str] = Field(None, description="Lista de cidades separadas por 'OR' (exemplo: 'Curitiba OR São Paulo')")
+    email: Optional[str] = Field(None, description="Email exato do candidato para busca direta")
+    phone: Optional[str] = Field(None, description="Telefone do candidato para busca direta")
+    linkedin_identifier: Optional[str] = Field(None, description="Identificador do LinkedIn do candidato")
 
 class CityRequest(BaseModel):
-    q: str
-    exact: Optional[bool] = False
-    size: Optional[int] = 20
+    """
+    Requisição para busca de cidades no Elasticsearch.
+    """
+    q: str = Field(..., description="Termo de busca para encontrar cidades (pode usar operador OR para várias cidades)")
+    exact: Optional[bool] = Field(False, description="Se verdadeiro, busca apenas correspondências exatas de nome de cidade")
+    size: Optional[int] = Field(20, description="Número máximo de cidades a retornar (limitado a 10.000)")
 
 class CityResponse(BaseModel):
-    total: int
-    query: Dict[str, Any]
-    results: List[Dict[str, Any]]
+    """
+    Resposta da busca de cidades contendo o total de resultados, query utilizada e a lista de cidades encontradas.
+    """
+    total: int = Field(..., description="Número total de cidades encontradas")
+    query: Dict[str, Any] = Field(..., description="Query utilizada na busca do Elasticsearch")
+    results: List[Dict[str, Any]] = Field(..., description="Lista de cidades encontradas com seus detalhes")
 
 class SearchResponse(BaseModel):
-    total: int
-    results: List[Dict[str, Any]]
+    """
+    Resposta da busca de candidatos contendo o total de resultados e a lista de candidatos encontrados.
+    """
+    total: int = Field(..., description="Número total de candidatos encontrados")
+    results: List[Dict[str, Any]] = Field(..., description="Lista de candidatos encontrados com seus detalhes")
 
 class Education(BaseModel):
     course: str
@@ -205,6 +215,29 @@ async def search_candidates(
     request: SearchRequest,
     api_key: str = Depends(verify_api_key)
 ) -> SearchResponse:
+    """
+    Busca candidatos no banco de talentos com base nos critérios fornecidos.
+    
+    - Use o campo **q** para termos de busca geral (habilidades, tecnologias, etc.)
+    - Use o campo **cities** para buscar por cidades específicas (ex: "Curitiba OR São Paulo")
+    - Candidatos que correspondem a ambos os critérios terão prioridade nos resultados
+    
+    Exemplos:
+    
+    ```
+    # Buscar desenvolvedores React em Curitiba
+    {
+      "q": "React developer",
+      "cities": "Curitiba"
+    }
+    
+    # Buscar candidatos em múltiplas cidades
+    {
+      "q": "Java senior",
+      "cities": "São Paulo OR Rio de Janeiro"
+    }
+    ```
+    """
     try:
         # Construindo a query base com query_string
         must_conditions = []
@@ -212,44 +245,30 @@ async def search_candidates(
         # Variável para armazenar IDs de cidades encontradas
         city_ids = []
 
-        # Adiciona a query_string apenas se q não estiver vazio
-        if request.q and request.q.strip():
-            query_text = request.q.strip()
+        # Processa o campo cities se estiver presente
+        if request.cities and request.cities.strip():
+            city_query = request.cities.strip()
+            print(f"DEBUG - Processando cidades: {city_query}")
             
-            # Primeiro, vamos verificar se a consulta contém operadores OR entre nomes de cidades
-            possible_city_queries = []
+            # Separar cidades por OR
+            city_names = [name.strip() for name in city_query.split(" OR ")]
+            print(f"DEBUG - Buscando cidades: {city_names}")
             
-            # Verifica se há operadores OR explícitos
-            if " OR " in query_text:
-                or_terms = [term.strip() for term in query_text.split(" OR ")]
-                for term in or_terms:
-                    if term and len(term) > 2:  # Ignorar termos muito curtos
-                        # Para termos que parecem ser compostos (como "São José dos Pinhais")
-                        possible_city_queries.append(term)
-            
-            # Também verifica os termos individuais
-            individual_terms = [term.strip('()"\'"') for term in query_text.replace(" AND ", " ").replace(" OR ", " ").split()]
-            for term in individual_terms:
-                if term and len(term) > 2 and term not in possible_city_queries:  # Ignorar termos muito curtos e duplicados
-                    possible_city_queries.append(term)
-            
-            print(f"DEBUG - Possíveis consultas de cidades: {possible_city_queries}")
-            
-            # Buscar cidades para cada possível nome
+            # Buscar cada cidade individualmente
             try:
-                for city_query in possible_city_queries:
-                    # Para termos que parecem nomes de cidades, vamos buscar com prioridade para match_phrase
+                for city_name in city_names:
+                    # Consulta otimizada para nomes de cidades
                     cities_query = {
                         "query": {
                             "bool": {
                                 "should": [
-                                    {"match_phrase": {"name": {"query": city_query, "boost": 10}}},
-                                    {"match": {"name": {"query": city_query, "fuzziness": "AUTO"}}}
+                                    {"match_phrase": {"name": {"query": city_name, "boost": 15}}},
+                                    {"match": {"name": {"query": city_name, "fuzziness": "AUTO"}}}
                                 ],
                                 "minimum_should_match": 1
                             }
                         },
-                        "size": 5  # Limitando a 5 resultados por termo
+                        "size": 5
                     }
                     
                     cities_response = es_client.search(
@@ -262,15 +281,17 @@ async def search_candidates(
                         city_id = city_hit["_id"]
                         if city_id not in city_ids:  # Evitar duplicatas
                             city_score = city_hit.get("_score", 0)
-                            # Só adiciona a cidade se o score for bom (maior que 5)
-                            if city_score > 5:
+                            if city_score > 5:  # Só adiciona se o score for bom
                                 city_ids.append(city_id)
                                 print(f"DEBUG - Cidade encontrada: {city_hit['_source'].get('name')} (ID: {city_id}, Score: {city_score})")
                 
                 print(f"DEBUG - Total de cidades encontradas: {len(city_ids)} IDs")
             except Exception as city_error:
                 print(f"ALERTA - Erro ao buscar cidades: {str(city_error)}")
-                # Continua mesmo se houver erro na busca de cidades
+        
+        # Adiciona a query_string apenas se q não estiver vazio
+        if request.q and request.q.strip():
+            query_text = request.q.strip()
             
             # Adiciona a consulta principal para o índice de candidatos
             must_conditions.append({
@@ -307,25 +328,31 @@ async def search_candidates(
             must_conditions.append({"term": {"linkedin_identifier.keyword": request.linkedin_identifier.strip()}})
 
         # Se não houver nenhuma condição, retorna lista vazia
-        if not must_conditions:
+        if not must_conditions and not city_ids:
             return SearchResponse(total=0, results=[])
 
         # Estrutura base da query
         query = {
             "query": {
-                "bool": {
-                    "must": must_conditions
-                }
+                "bool": {}
             }
         }
 
-        # Se encontramos cidades, adicionar um "should" para aumentar o score de candidatos nessas cidades
+        # Se temos critérios de busca, adiciona como must
+        if must_conditions:
+            query["query"]["bool"]["must"] = must_conditions
+
+        # Se encontramos cidades, adicionar um "should" para aumentar o score
+        # Se não há outras condições, as cidades se tornam obrigatórias (must)
         if city_ids:
-            query["query"]["bool"]["should"] = [
-                {"terms": {"address.city_id": city_ids, "boost": 10.0}}
-            ]
-            # Define minimum_should_match como 0 para que seja um boost, não um requisito
-            query["query"]["bool"]["minimum_should_match"] = 0
+            city_clause = {"terms": {"address.city_id": city_ids, "boost": 10.0}}
+            if must_conditions:
+                # Se já temos outras condições, as cidades são um boost
+                query["query"]["bool"]["should"] = [city_clause]
+                query["query"]["bool"]["minimum_should_match"] = 0
+            else:
+                # Se não temos outras condições, as cidades são obrigatórias
+                query["query"]["bool"]["must"] = [city_clause]
 
         print("="*50)
         print("DEBUG - Elasticsearch Query:")
