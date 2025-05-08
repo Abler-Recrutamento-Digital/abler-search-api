@@ -220,7 +220,7 @@ async def search_candidates(
     
     - Use o campo **q** para termos de busca geral (habilidades, tecnologias, etc.)
     - Use o campo **cities** para buscar por cidades específicas (ex: "Curitiba OR São Paulo")
-    - Candidatos que correspondem a ambos os critérios terão prioridade nos resultados
+    - Os candidatos retornados devem atender a todos os critérios especificados
     
     Exemplos:
     
@@ -286,6 +286,11 @@ async def search_candidates(
                                 print(f"DEBUG - Cidade encontrada: {city_hit['_source'].get('name')} (ID: {city_id}, Score: {city_score})")
                 
                 print(f"DEBUG - Total de cidades encontradas: {len(city_ids)} IDs")
+                
+                # Se encontramos cidades, adicionar como condição obrigatória
+                if city_ids:
+                    must_conditions.append({"terms": {"address.city_id": city_ids}})
+                
             except Exception as city_error:
                 print(f"ALERTA - Erro ao buscar cidades: {str(city_error)}")
         
@@ -328,31 +333,17 @@ async def search_candidates(
             must_conditions.append({"term": {"linkedin_identifier.keyword": request.linkedin_identifier.strip()}})
 
         # Se não houver nenhuma condição, retorna lista vazia
-        if not must_conditions and not city_ids:
+        if not must_conditions:
             return SearchResponse(total=0, results=[])
 
-        # Estrutura base da query
+        # Estrutura da query com todos os critérios como obrigatórios (must)
         query = {
             "query": {
-                "bool": {}
+                "bool": {
+                    "must": must_conditions
+                }
             }
         }
-
-        # Se temos critérios de busca, adiciona como must
-        if must_conditions:
-            query["query"]["bool"]["must"] = must_conditions
-
-        # Se encontramos cidades, adicionar um "should" para aumentar o score
-        # Se não há outras condições, as cidades se tornam obrigatórias (must)
-        if city_ids:
-            city_clause = {"terms": {"address.city_id": city_ids, "boost": 10.0}}
-            if must_conditions:
-                # Se já temos outras condições, as cidades são um boost
-                query["query"]["bool"]["should"] = [city_clause]
-                query["query"]["bool"]["minimum_should_match"] = 0
-            else:
-                # Se não temos outras condições, as cidades são obrigatórias
-                query["query"]["bool"]["must"] = [city_clause]
 
         print("="*50)
         print("DEBUG - Elasticsearch Query:")
